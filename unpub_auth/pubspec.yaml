@@ -11,9 +11,12 @@ executables:
 
 dependencies:
   collection: ^1.15.0
-  googleapis_auth: ^1.3.0
   path: ^1.8.1
   http: ^0.13.4
+  shelf: ^1.2.0
+  http_multi_server: ^3.0.1
+  oauth2: ^2.0.0
+  args: ^2.3.0
 
 dev_dependencies:
   lints: ^1.0.0

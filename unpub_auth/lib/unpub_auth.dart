@@ -1,81 +1,120 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'credential.dart';
-import 'utils.dart';
+import 'package:shelf/shelf.dart' as shelf;
+import 'package:shelf/shelf_io.dart' as shelf_io;
+import 'package:oauth2/oauth2.dart' as oauth2;
 import 'package:http/http.dart' as http;
-import 'package:googleapis_auth/googleapis_auth.dart';
 
-/// The pub client's OAuth2 identifier.
-///
-/// It's from [dart-lang/pub/lib/src/oauth2.dart](https://github.com/dart-lang/pub/blob/400f21e9883ce6555b66d3ef82f0b732ba9b9fc8/lib/src/oauth2.dart#L21:L22)
-const _identifier = '818368855108-8grd2eg9tj9f38os6f1urbcvsq399u8n.apps.'
-    'googleusercontent.com';
+import 'utils.dart';
+import 'credentials_ext.dart';
 
-/// The pub client's OAuth2 secret.
-///
-/// This isn't actually meant to be kept a secret.
-///
-/// It's from [dart-lang/pub/lib/src/oauth2.dart](https://github.com/dart-lang/pub/blob/400f21e9883ce6555b66d3ef82f0b732ba9b9fc8/lib/src/oauth2.dart#L27)
-const _secret = 'SWeqj8seoJW0w7_CpEPFLX0K';
+const _tokenEndpoint = 'https://oauth2.googleapis.com/token';
+const _authEndpoint = 'https://accounts.google.com/o/oauth2/auth';
+const _scopes = ['openid', 'https://www.googleapis.com/auth/userinfo.email'];
 
-Future<void> run() async {
-  final credential = await readCredentialFromLocal();
-  final accessCredentials = await refreshCredential(credential);
-  final newCredential = Credential.fromAccessCredentials(
-      accessCredentials, credential.tokenEndpoint);
-  await writeNewCredential(newCredential);
-  outputNewAccessToken(newCredential);
+get _identifier => utf8.decode(base64.decode(
+    r'NDY4NDkyNDU2MjM5LTJja2wxdTB1dGloOHRzZWtnMGxpZ2NpY2VqYm8wbnZkLmFwcHMuZ29vZ2xldXNlcmNvbnRlbnQuY29t'));
+get _secret => utf8
+    .decode(base64.decode(r'R09DU1BYLUxHMWZTV052UjA0S0NrWVZRMTVGS3J1cGJ5bFk='));
+
+Future<void> run({bool verbose = false, bool silence = false}) async {
+  if (verbose) Utils.enableVerbose();
+  if (silence) Utils.enableSilence();
+
+  final credentials = await readCredentialsFromLocal();
+
+  if (credentials?.isValid() ?? false) {
+    /// unpub-credentials.json is valid.
+    /// Refresh and write it to file.
+    await refreshCredentials(credentials!);
+  } else {
+    /// unpub-credentials.json is not exist or invalid.
+    /// We should get a new Credentials file.
+    final client = await clientWithAuthorization();
+    await writeNewCredentials(client.credentials);
+    Utils.verbosePrint(client.credentials.toJson());
+  }
   return;
 }
 
-/// Output the new accessToken to stdout.
-void outputNewAccessToken(Credential credential) {
-  stdout.writeln(credential.accessToken);
+/// Write the new credentials file to unpub-credentials.json
+Future<void> writeNewCredentials(oauth2.Credentials credentials) async {
+  File(Utils.credentialsFilePath).writeAsStringSync(credentials.toJson());
 }
 
-/// Write new credential to pub-credentials.json.
-Future<void> writeNewCredential(Credential credential) async {
-  final jsonString = credential.toJsonString();
-  final credentialFile = File(Utils.credentialsFilePath);
-  await credentialFile.writeAsString(jsonString);
+/// Refresh `accessToken` of credentials
+Future<void> refreshCredentials(oauth2.Credentials credentials) async {
+  await oauth2.Client(oauth2.Credentials.fromJson(credentials.toJson()),
+      identifier: _identifier,
+      secret: _secret, onCredentialsRefreshed: (credential) async {
+    await writeNewCredentials(credential);
+  }).refreshCredentials();
 }
 
-/// Refresh credential.
-///
-/// `AccessCredentials` is from googleapis_auth,
-/// there's a convenient constructor in ./credential.dart
-Future<AccessCredentials> refreshCredential(Credential credential) async {
-  final client = http.Client();
-  final clientId = ClientId(_identifier, _secret);
-  final accessToken = AccessToken('Bearer', credential.accessToken,
-      DateTime.fromMillisecondsSinceEpoch(credential.expiration).toUtc());
-  final accessCredentials = AccessCredentials(
-      accessToken, credential.refreshToken, credential.scopes,
-      idToken: credential.idToken);
-  final newCredentials =
-      await refreshCredentials(clientId, accessCredentials, client);
-  newCredentials.toJson();
-  return newCredentials;
+/// Create a client with authorization.
+Future<oauth2.Client> clientWithAuthorization() async {
+  final grant = oauth2.AuthorizationCodeGrant(
+      _identifier, Uri.parse(_authEndpoint), Uri.parse(_tokenEndpoint),
+      secret: _secret, basicAuth: false, httpClient: http.Client());
+
+  final completer = Completer();
+
+  final server = await Utils.bindServer('localhost', 43230);
+  shelf_io.serveRequests(server, (request) {
+    if (request.url.path == 'authorized') {
+      /// That's safe.
+      /// see [dart-lang/pub/lib/src/oauth2.dart#L238:L240](https://github.com/dart-lang/pub/blob/400f21e9883ce6555b66d3ef82f0b732ba9b9fc8/lib/src/oauth2.dart#L238:L240)
+      server.close();
+      return shelf.Response.ok(r'unpub Authorized Successfully.');
+    }
+
+    if (request.url.path.isNotEmpty) {
+      /// Forbid all other requests.
+      return shelf.Response.notFound('Invalid URI.');
+    }
+
+    Utils.stdoutPrint('Authorization received, processing...');
+
+    /// Redirect to authorized page.
+    final resp =
+        shelf.Response.found('http://localhost:${server.port}/authorized');
+
+    completer.complete(
+        grant.handleAuthorizationResponse(Utils.queryToMap(request.url.query)));
+
+    return resp;
+  });
+
+  final authUrl = grant
+          .getAuthorizationUrl(Uri.parse('http://localhost:${server.port}'),
+              scopes: _scopes)
+          .toString() +
+      '&access_type=offline&approval_prompt=force';
+  Utils.stdoutPrint(
+      'unpub needs your authorization to upload packages on your behalf.\n'
+      'In a web browser, go to $authUrl\n'
+      'Then click "Allow access".\n\n'
+      'Waiting for your authorization...');
+
+  var client = await completer.future;
+  Utils.stdoutPrint('Successfully authorized.\n');
+  return client;
 }
 
 /// Read credential file from local path.
-Future<Credential> readCredentialFromLocal() async {
+Future<oauth2.Credentials?> readCredentialsFromLocal() async {
   final credentialFile = File(Utils.credentialsFilePath);
+
   final exists = await credentialFile.exists();
   if (!exists) {
-    throw '''${Utils.credentialsFilePath} is not exist.
-Please run `dart pub login` first''';
+    Utils.verbosePrint('${Utils.credentialsFilePath} is not exist.\n'
+        'Please run `dart pub login` first');
+    return null;
   }
 
   final fileContent = await credentialFile.readAsString();
-  late final Map<String, dynamic> credential;
-  try {
-    credential = json.decode(fileContent) as Map<String, dynamic>;
-  } catch (e) {
-    throw '''${Utils.credentialsFilePath} is not a JSON, please check the file content.
-Detail: ${e.toString()}''';
-  }
 
-  return Credential.fromMap(credential);
+  return oauth2.Credentials.fromJson(fileContent);
 }
