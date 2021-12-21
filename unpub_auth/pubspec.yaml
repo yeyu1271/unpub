@@ -1,6 +1,6 @@
 name: unpub_auth
-description: A cli used to refresh googleapis token.
-version: 0.0.1
+description: An auth tool for unpub.
+version: 0.1.0
 homepage: https://github.com/bytedance/unpub
 
 environment:
