@@ -62,15 +62,5 @@ class Utils {
     ];
   }
 
-  static void verbosePrint(Object? object) {
-    if (_verbose) {
-      stdoutPrint(object);
-    }
-  }
-
-  static void stdoutPrint(Object? object) {
-    if (!_silence) {
-      stdout.write(object);
-    }
-  }
+  static void stdoutPrint(Object? object) => stdout.write(object);
 }

@@ -19,10 +19,46 @@ get _identifier => utf8.decode(base64.decode(
 get _secret => utf8
     .decode(base64.decode(r'R09DU1BYLUxHMWZTV052UjA0S0NrWVZRMTVGS3J1cGJ5bFk='));
 
-Future<void> run({bool verbose = false, bool silence = false}) async {
-  if (verbose) Utils.enableVerbose();
-  if (silence) Utils.enableSilence();
+enum Flow {
+  login,
+  logout,
+  migrate,
+  getToken,
+}
 
+Future<void> run({Flow flow = Flow.getToken, Object? args}) async {
+  switch (flow) {
+    case Flow.login:
+      await _goAuth();
+      break;
+    case Flow.logout:
+      await removeCredentialsFromLocal();
+      break;
+    case Flow.migrate:
+      await migrate(args);
+      break;
+    case Flow.getToken:
+      await getToken();
+      break;
+  }
+}
+
+Future<void> migrate(Object? args) async {
+  if (args != null && args is String && await File(args).exists()) {
+    final isValid =
+        oauth2.Credentials.fromJson(await File(args).readAsString()).isValid();
+    if (isValid) {
+      await File(args).copy(Utils.credentialsFilePath);
+      Utils.stdoutPrint(
+          'Migrate from $args success.\nNew credentials file is saved at ${Utils.credentialsFilePath}');
+      return;
+    }
+  }
+
+  throw "$args is invalid or not exist.";
+}
+
+Future<void> getToken() async {
   final credentials = await readCredentialsFromLocal();
 
   if (credentials?.isValid() ?? false) {
@@ -32,11 +68,16 @@ Future<void> run({bool verbose = false, bool silence = false}) async {
   } else {
     /// unpub-credentials.json is not exist or invalid.
     /// We should get a new Credentials file.
-    final client = await clientWithAuthorization();
-    await writeNewCredentials(client.credentials);
-    Utils.verbosePrint(client.credentials.toJson());
+    throw '${Utils.credentialsFilePath} is not found or invalid.'
+        '\nPlease call unpub_auth login first.';
   }
   return;
+}
+
+Future<void> _goAuth() async {
+  final client = await clientWithAuthorization();
+  await writeNewCredentials(client.credentials);
+  Utils.stdoutPrint(client.credentials.accessToken);
 }
 
 /// Write the new credentials file to unpub-credentials.json
@@ -46,11 +87,14 @@ Future<void> writeNewCredentials(oauth2.Credentials credentials) async {
 
 /// Refresh `accessToken` of credentials
 Future<void> refreshCredentials(oauth2.Credentials credentials) async {
-  await oauth2.Client(oauth2.Credentials.fromJson(credentials.toJson()),
+  final client = oauth2.Client(
+      oauth2.Credentials.fromJson(credentials.toJson()),
       identifier: _identifier,
       secret: _secret, onCredentialsRefreshed: (credential) async {
     await writeNewCredentials(credential);
-  }).refreshCredentials();
+  });
+  await client.refreshCredentials();
+  Utils.stdoutPrint(client.credentials.accessToken);
 }
 
 /// Create a client with authorization.
@@ -109,12 +153,18 @@ Future<oauth2.Credentials?> readCredentialsFromLocal() async {
 
   final exists = await credentialFile.exists();
   if (!exists) {
-    Utils.verbosePrint('${Utils.credentialsFilePath} is not exist.\n'
-        'Please run `dart pub login` first');
+    Utils.stdoutPrint('${Utils.credentialsFilePath} is not exist.\n'
+        'Please run `unpub_auth login` first');
     return null;
   }
 
   final fileContent = await credentialFile.readAsString();
 
   return oauth2.Credentials.fromJson(fileContent);
+}
+
+/// Remove credential file from local path.
+Future<void> removeCredentialsFromLocal() async {
+  await File(Utils.credentialsFilePath).delete();
+  Utils.stdoutPrint('${Utils.credentialsFilePath} has been deleted.');
 }
