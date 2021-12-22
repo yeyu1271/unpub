@@ -40,15 +40,15 @@ void main(List<String> arguments) async {
       stdout.write(format('''
 An auth tool for unpub. unpub is using Google OAuth2 by default. There's two situations where the unpub_auth can be used.
 
-{@yellow}1. Login in current device, and publish pub packages locally.{@end}
+{@yellow}1. Login locally, and publish pub packages locally.{@end}
   {@blue}step 1.{@end} Call `unpub_auth login` when you first use it, and it will save credentials locally.
   {@blue}step 2.{@end} Before calling `dart pub publish` or `flutter pub publish`, call `unpub_auth get | dart pub token add <self-hosted-pub-server>`
   
-{@yellow}2. Login locally, and migrate the credentials file to CI/CD device.{@end}
-{@yellow}   On CI/CD host device, you may not have opportunity to call `unpub_auth login`, so you can use `unpub_auth migrate`.{@end}
+{@yellow}2. Login locally, and publish pub packages from CI/CD.{@end}
+{@yellow}   On CI/CD host device, you may not have opportunity to call `unpub_auth login`, so you can use `unpub_auth migrate` to migrate the credentials file.{@end}
   {@blue}step 1.{@end} In local device, call `unpub_auth login` when you first use it, and it will save credentials locally.
   {@blue}step 2.{@end} Copy the credentials file which was generated in step 1 to CI/CD device.
-  {@blue}step 3.{@end} In CI/CD device, Call `unpub_auth migrate <credentials-file-path>`, so the CI/CD will have the same credentials file.
+  {@blue}step 3.{@end} In CI/CD device, call `unpub_auth migrate <credentials-file-path>`, so the CI/CD will have the same credentials file.
   {@blue}step 4.{@end} In CI/CD device, before calling `dart pub publish` or `flutter pub publish`, call `unpub_auth get | dart pub token add <self-hosted-pub-server>`
 
 Usage: {@green}unpub_auth <command> [arguments]{@end}
