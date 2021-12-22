@@ -82,12 +82,12 @@ Future<void> getToken() async {
 
 Future<void> _goAuth() async {
   final client = await clientWithAuthorization();
-  await writeNewCredentials(client.credentials);
+  writeNewCredentials(client.credentials);
   Utils.stdoutPrint(client.credentials.accessToken);
 }
 
 /// Write the new credentials file to unpub-credentials.json
-Future<void> writeNewCredentials(oauth2.Credentials credentials) async {
+void writeNewCredentials(oauth2.Credentials credentials) {
   File(Utils.credentialsFilePath).writeAsStringSync(credentials.toJson());
 }
 
@@ -97,7 +97,7 @@ Future<void> refreshCredentials(oauth2.Credentials credentials) async {
       oauth2.Credentials.fromJson(credentials.toJson()),
       identifier: _identifier,
       secret: _secret, onCredentialsRefreshed: (credential) async {
-    await writeNewCredentials(credential);
+    writeNewCredentials(credential);
   });
   await client.refreshCredentials();
   Utils.stdoutPrint(client.credentials.accessToken);

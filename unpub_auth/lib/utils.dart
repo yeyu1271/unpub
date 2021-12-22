@@ -39,7 +39,7 @@ class Utils {
   static Map<String, String> queryToMap(String queryList) {
     var map = <String, String>{};
     for (var pair in queryList.split('&')) {
-      var split = _split1(pair, '=');
+      var split = _split(pair, '=');
       if (split.isEmpty) continue;
       var key = _urlDecode(split[0]);
       var value = split.length > 1 ? _urlDecode(split[1]) : '';
@@ -51,7 +51,7 @@ class Utils {
   static String _urlDecode(String encoded) =>
       Uri.decodeComponent(encoded.replaceAll('+', ' '));
 
-  static List<String> _split1(String toSplit, String pattern) {
+  static List<String> _split(String toSplit, String pattern) {
     if (toSplit.isEmpty) return <String>[];
 
     var index = toSplit.indexOf(pattern);
