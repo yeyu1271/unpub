@@ -17,6 +17,7 @@ dependencies:
   http_multi_server: ^3.0.1
   oauth2: ^2.0.0
   args: ^2.3.0
+  console: ^4.1.0
 
 dev_dependencies:
   lints: ^1.0.0
