@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:console/console.dart';
 import 'package:unpub_auth/unpub_auth.dart' as unpub_auth;
+import 'package:unpub_auth/utils.dart';
 
 void main(List<String> arguments) async {
   final parser = ArgParser();
@@ -27,7 +28,8 @@ void main(List<String> arguments) async {
     case 'migrate':
       flow = unpub_auth.Flow.migrate;
       if (result.command?.arguments.length != 1) {
-        throw "unpub_auth migrate need a path argument";
+        Utils.stdoutPrint("unpub_auth migrate need a path argument");
+        exit(1);
       }
       subArgs = result.command?.arguments.first;
       break;

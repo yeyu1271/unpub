@@ -44,18 +44,23 @@ Future<void> run({Flow flow = Flow.getToken, Object? args}) async {
 }
 
 Future<void> migrate(Object? args) async {
-  if (args != null && args is String && await File(args).exists()) {
-    final isValid =
-        oauth2.Credentials.fromJson(await File(args).readAsString()).isValid();
-    if (isValid) {
-      await File(args).copy(Utils.credentialsFilePath);
-      Utils.stdoutPrint(
-          'Migrate from $args success.\nNew credentials file is saved at ${Utils.credentialsFilePath}');
-      return;
-    }
+  if (args == null || args is! String) {
+    Utils.stdoutPrint("$args is invalid");
+    exit(1);
+  }
+  if (File(args).existsSync() == false) {
+    Utils.stdoutPrint("$args is not exist.");
+    exit(1);
   }
 
-  throw "$args is invalid or not exist.";
+  final isValid =
+      oauth2.Credentials.fromJson(await File(args).readAsString()).isValid();
+  if (isValid) {
+    await File(args).copy(Utils.credentialsFilePath);
+    Utils.stdoutPrint(
+        'Migrate from $args success.\nNew credentials file is saved at ${Utils.credentialsFilePath}');
+    return;
+  }
 }
 
 Future<void> getToken() async {
@@ -68,8 +73,9 @@ Future<void> getToken() async {
   } else {
     /// unpub-credentials.json is not exist or invalid.
     /// We should get a new Credentials file.
-    throw '${Utils.credentialsFilePath} is not found or invalid.'
-        '\nPlease call unpub_auth login first.';
+    Utils.stdoutPrint('${Utils.credentialsFilePath} is not found or invalid.'
+        '\nPlease call unpub_auth login first.');
+    exit(1);
   }
   return;
 }
