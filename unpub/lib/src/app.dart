@@ -141,15 +141,19 @@ class App {
   Future<UnpubPackage?> _queryPackage(String name) async {
     var waitList = [metaStore.queryPackage(name)];
 
-    if (standalone) {
+    if (!standalone) {
       waitList.add(remoteStore.queryPackage(name));
     }
     var packages = await Future.wait(waitList);
 
-    var package = packages[0] ?? packages[1];
-    if (packages[0] != null && packages[1] != null) {
-      // TODO: need to deduplicate
-      package!.versions.addAll(packages[1]!.versions);
+    UnpubPackage? package = packages[0];
+    if (!standalone) {
+      UnpubPackage? remotePackage = packages[1];
+      package = package ?? remotePackage;
+      if (package != null && remotePackage != null) {
+        // TODO: need to deduplicate
+        package.versions.addAll(remotePackage.versions);
+      }
     }
 
     return package;
