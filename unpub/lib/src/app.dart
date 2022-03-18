@@ -19,6 +19,7 @@ import 'package:unpub/src/package_store.dart';
 import 'utils.dart';
 import 'static/index.html.dart' as index_html;
 import 'static/main.dart.js.dart' as main_dart_js;
+import 'http_proxy_store.dart';
 
 part 'app.g.dart';
 
@@ -29,12 +30,20 @@ class App {
   /// package(tarball) store
   final PackageStore packageStore;
 
+  /// remote store
+  final HttpProxyStore remoteStore;
+
   /// upstream url, default: https://pub.dev
   final String upstream;
 
   /// http(s) proxy to call googleapis (to get uploader email)
   final String? googleapisProxy;
   final String? overrideUploaderEmail;
+
+  /// use cache
+  final bool useCache;
+
+  final bool standalone;
 
   /// validate if the package can be published
   ///
@@ -49,7 +58,9 @@ class App {
     this.googleapisProxy,
     this.overrideUploaderEmail,
     this.uploadValidator,
-  });
+    this.useCache = false,
+    this.standalone = false,
+  }) : remoteStore = HttpProxyStore(upstream);
 
   static shelf.Response _okWithJson(Map<String, dynamic> data) =>
       shelf.Response.ok(
@@ -78,6 +89,7 @@ class App {
 
   Future<String> _getUploaderEmail(shelf.Request req) async {
     if (overrideUploaderEmail != null) return overrideUploaderEmail!;
+    if (standalone) return '';
 
     var authHeader = req.headers[HttpHeaders.authorizationHeader];
     if (authHeader == null) throw 'missing authorization header';
@@ -126,6 +138,115 @@ class App {
     };
   }
 
+  Future<UnpubPackage?> _queryPackage(String name) async {
+    var waitList = [metaStore.queryPackage(name)];
+
+    if (standalone) {
+      waitList.add(remoteStore.queryPackage(name));
+    }
+    var packages = await Future.wait(waitList);
+
+    var package = packages[0] ?? packages[1];
+    if (packages[0] != null && packages[1] != null) {
+      // TODO: need to deduplicate
+      package!.versions.addAll(packages[1]!.versions);
+    }
+
+    return package;
+  }
+
+  Future<void> _upload(Stream<List<int>>? fileData, String uploader) async {
+    var bb = await fileData!.fold(
+        BytesBuilder(), (BytesBuilder byteBuilder, d) => byteBuilder..add(d));
+    var tarballBytes = bb.takeBytes();
+    var tarBytes = GZipDecoder().decodeBytes(tarballBytes);
+    var archive = TarDecoder().decodeBytes(tarBytes);
+    ArchiveFile? pubspecArchiveFile;
+    ArchiveFile? readmeFile;
+    ArchiveFile? changelogFile;
+
+    for (var file in archive.files) {
+      if (file.name == 'pubspec.yaml') {
+        pubspecArchiveFile = file;
+        continue;
+      }
+      if (file.name.toLowerCase() == 'readme.md') {
+        readmeFile = file;
+        continue;
+      }
+      if (file.name.toLowerCase() == 'changelog.md') {
+        changelogFile = file;
+        continue;
+      }
+    }
+
+    if (pubspecArchiveFile == null) {
+      throw 'Did not find any pubspec.yaml file in upload. Aborting.';
+    }
+
+    var pubspecYaml = utf8.decode(pubspecArchiveFile.content);
+    var pubspec = loadYamlAsMap(pubspecYaml)!;
+
+    if (uploadValidator != null) {
+      await uploadValidator!(pubspec, uploader);
+    }
+
+    // TODO: null
+    var name = pubspec['name'] as String;
+    var version = pubspec['version'] as String;
+
+    var package = await metaStore.queryPackage(name);
+
+    // Package already exists
+    if (package != null) {
+      if (package.private == false) {
+        throw '$name is not a private package. Please upload it to https://pub.dev';
+      }
+
+      // Check uploaders
+      if (package.uploaders?.contains(uploader) == false) {
+        throw '$uploader is not an uploader of $name';
+      }
+
+      // Check duplicated version
+      var duplicated =
+          package.versions.firstWhereOrNull((item) => version == item.version);
+      if (duplicated != null) {
+        throw 'version invalid: $name@$version already exists.';
+      }
+    }
+
+    // Upload package tarball to storage
+    await packageStore.upload(name, version, tarballBytes);
+
+    String? readme;
+    String? changelog;
+    if (readmeFile != null) {
+      readme = utf8.decode(readmeFile.content);
+    }
+    if (changelogFile != null) {
+      changelog = utf8.decode(changelogFile.content);
+    }
+
+    // Write package meta to database
+    var unpubVersion = UnpubVersion(
+      version,
+      pubspec,
+      pubspecYaml,
+      uploader,
+      readme,
+      changelog,
+      DateTime.now(),
+    );
+    await metaStore.addVersion(name, unpubVersion);
+  }
+
+  Future<void> _cachePackage(String name, String version) async {
+    var fileData = await remoteStore.download(name, version);
+    var uploader = overrideUploaderEmail ?? '';
+    await _upload(fileData, uploader);
+  }
+
   bool isPubClient(shelf.Request req) {
     var ua = req.headers[HttpHeaders.userAgentHeader];
     print(ua);
@@ -136,11 +257,10 @@ class App {
 
   @Route.get('/api/packages/<name>')
   Future<shelf.Response> getVersions(shelf.Request req, String name) async {
-    var package = await metaStore.queryPackage(name);
+    var package = await _queryPackage(name);
 
     if (package == null) {
-      return shelf.Response.found(
-          Uri.parse(upstream).resolve('/api/packages/$name').toString());
+      return shelf.Response.notFound('Not found');
     }
 
     package.versions.sort((a, b) {
@@ -169,11 +289,9 @@ class App {
       print(err);
     }
 
-    var package = await metaStore.queryPackage(name);
+    var package = await _queryPackage(name);
     if (package == null) {
-      return shelf.Response.found(Uri.parse(upstream)
-          .resolve('/api/packages/$name/versions/$version')
-          .toString());
+      return shelf.Response.notFound('Not found');
     }
 
     var packageVersion =
@@ -190,6 +308,13 @@ class App {
       shelf.Request req, String name, String version) async {
     var package = await metaStore.queryPackage(name);
     if (package == null) {
+      if (standalone) {
+        return shelf.Response.notFound('Not found');
+      }
+
+      if (useCache) {
+        _cachePackage(name, version);
+      }
       return shelf.Response.found(Uri.parse(upstream)
           .resolve('/packages/$name/versions/$version.tar.gz')
           .toString());
@@ -242,89 +367,7 @@ class App {
         fileData = part;
       }
 
-      var bb = await fileData!.fold(
-          BytesBuilder(), (BytesBuilder byteBuilder, d) => byteBuilder..add(d));
-      var tarballBytes = bb.takeBytes();
-      var tarBytes = GZipDecoder().decodeBytes(tarballBytes);
-      var archive = TarDecoder().decodeBytes(tarBytes);
-      ArchiveFile? pubspecArchiveFile;
-      ArchiveFile? readmeFile;
-      ArchiveFile? changelogFile;
-
-      for (var file in archive.files) {
-        if (file.name == 'pubspec.yaml') {
-          pubspecArchiveFile = file;
-          continue;
-        }
-        if (file.name.toLowerCase() == 'readme.md') {
-          readmeFile = file;
-          continue;
-        }
-        if (file.name.toLowerCase() == 'changelog.md') {
-          changelogFile = file;
-          continue;
-        }
-      }
-
-      if (pubspecArchiveFile == null) {
-        throw 'Did not find any pubspec.yaml file in upload. Aborting.';
-      }
-
-      var pubspecYaml = utf8.decode(pubspecArchiveFile.content);
-      var pubspec = loadYamlAsMap(pubspecYaml)!;
-
-      if (uploadValidator != null) {
-        await uploadValidator!(pubspec, uploader);
-      }
-
-      // TODO: null
-      var name = pubspec['name'] as String;
-      var version = pubspec['version'] as String;
-
-      var package = await metaStore.queryPackage(name);
-
-      // Package already exists
-      if (package != null) {
-        if (package.private == false) {
-          throw '$name is not a private package. Please upload it to https://pub.dev';
-        }
-
-        // Check uploaders
-        if (package.uploaders?.contains(uploader) == false) {
-          throw '$uploader is not an uploader of $name';
-        }
-
-        // Check duplicated version
-        var duplicated = package.versions
-            .firstWhereOrNull((item) => version == item.version);
-        if (duplicated != null) {
-          throw 'version invalid: $name@$version already exists.';
-        }
-      }
-
-      // Upload package tarball to storage
-      await packageStore.upload(name, version, tarballBytes);
-
-      String? readme;
-      String? changelog;
-      if (readmeFile != null) {
-        readme = utf8.decode(readmeFile.content);
-      }
-      if (changelogFile != null) {
-        changelog = utf8.decode(changelogFile.content);
-      }
-
-      // Write package meta to database
-      var unpubVersion = UnpubVersion(
-        version,
-        pubspec,
-        pubspecYaml,
-        uploader,
-        readme,
-        changelog,
-        DateTime.now(),
-      );
-      await metaStore.addVersion(name, unpubVersion);
+      await _upload(fileData, uploader);
 
       // TODO: Upload docs
       return shelf.Response.found(req.requestedUri
