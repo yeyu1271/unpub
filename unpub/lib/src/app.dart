@@ -150,9 +150,9 @@ class App {
     if (!standalone) {
       UnpubPackage? remotePackage = packages[1];
       package = package ?? remotePackage;
-      if (package != null && remotePackage != null) {
+      if (packages[0] != null && remotePackage != null) {
         // TODO: need to deduplicate
-        package.versions.addAll(remotePackage.versions);
+        package!.versions.addAll(remotePackage.versions);
       }
     }
 
