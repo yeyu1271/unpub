@@ -11,12 +11,14 @@ final baseUri = Uri.parse(pubHostedUrl);
 
 final package0 = 'package_0';
 final package1 = 'package_1';
+final package2 = 'package_2';
 final email0 = 'email0@example.com';
 final email1 = 'email1@example.com';
 final email2 = 'email2@example.com';
 final email3 = 'email3@example.com';
 
-createServer(String opEmail) async {
+createServer(String opEmail,
+    {bool useCache = false, bool standalone = false}) async {
   final db = Db('mongodb://localhost:27017/dart_pub_test');
   await db.open();
   var mongoStore = unpub.MongoStore(db);
@@ -25,6 +27,8 @@ createServer(String opEmail) async {
     metaStore: mongoStore,
     packageStore: unpub.FileStore(baseDir),
     overrideUploaderEmail: opEmail,
+    useCache: useCache,
+    standalone: standalone,
   );
 
   var server = await app.serve('0.0.0.0', 4000);
@@ -53,5 +57,11 @@ Future<ProcessResult> pubUploader(String name, String operation, String email) {
 
   return Process.run('dart', ['pub', 'uploader', operation, email],
       workingDirectory: path.absolute('test/fixtures', name, '0.0.1'),
+      environment: {'PUB_HOSTED_URL': pubHostedUrl});
+}
+
+Future<ProcessResult> pubDownload(String name, [String version = '0.0.1']) {
+  return Process.run('dart', ['pub', 'get'],
+      workingDirectory: path.absolute('test/fixtures', name, version),
       environment: {'PUB_HOSTED_URL': pubHostedUrl});
 }
